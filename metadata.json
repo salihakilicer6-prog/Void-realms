@@ -1,0 +1,6 @@
+{
+  "name": "Void Realms",
+  "description": "Massive dark fantasy sci-fi online RPG with authoritative server, open world, combat, procedural items, and owner admin panel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
