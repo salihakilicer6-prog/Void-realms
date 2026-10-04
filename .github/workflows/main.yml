@@ -1,0 +1,13 @@
+Test the current VOID REALMS V5 project on the main branch.
+
+Run the actual build and available tests for the Android/Kotlin app, TypeScript server, and Godot client where applicable.
+
+Fix any compilation, dependency, configuration, or test errors you find.
+
+Do not add mock systems or change gameplay unnecessarily.
+
+When finished, report only:
+BUILD — PASS/FAIL
+TESTS — PASS/FAIL
+ERRORS FIXED — list
+REMAINING ERRORS — list
