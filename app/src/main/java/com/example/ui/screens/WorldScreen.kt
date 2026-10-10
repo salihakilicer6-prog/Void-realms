@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.engine.SkeletalAnimationEngine
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -945,31 +946,37 @@ private fun drawHumanoid3D(
     isMoving: Boolean
 ) {
     val scale = proj.scale
+    val animState = if (isMoving) SkeletalAnimationEngine.AnimState.WALK else SkeletalAnimationEngine.AnimState.IDLE
+    val pose = SkeletalAnimationEngine.computePose(animState, walkPhase)
+
     val headSize = 14f * scale
     val torsoWidth = 16f * scale
     val torsoHeight = 22f * scale
     val limbWidth = 6f * scale
     val limbHeight = 18f * scale
 
-    val armAngle = if (isMoving) sin(walkPhase) * 14f else 0f
-    val legAngle = if (isMoving) sin(walkPhase) * 18f else 0f
+    val spineBone = pose.bones[1]
+    val leftArmBone = pose.bones[3]
+    val rightArmBone = pose.bones[5]
+    val leftLegBone = pose.bones[7]
+    val rightLegBone = pose.bones[9]
 
     val cx = proj.x
-    val cy = proj.y - 20f * scale
+    val cy = proj.y - (spineBone.transY * scale)
 
-    // Left & Right Legs
+    // Left & Right Legs (Animated by skeletal pose)
     drawScope.drawRect(
         color = Color(0xFF1E293B),
-        topLeft = Offset(cx - torsoWidth / 2 + 1f, cy + torsoHeight / 2 + legAngle * 0.3f),
+        topLeft = Offset(cx - torsoWidth / 2 + 1f, cy + torsoHeight / 2 + leftLegBone.rotX * 10f * scale),
         size = Size(limbWidth, limbHeight)
     )
     drawScope.drawRect(
         color = Color(0xFF0F172A),
-        topLeft = Offset(cx + torsoWidth / 2 - limbWidth - 1f, cy + torsoHeight / 2 - legAngle * 0.3f),
+        topLeft = Offset(cx + torsoWidth / 2 - limbWidth - 1f, cy + torsoHeight / 2 + rightLegBone.rotX * 10f * scale),
         size = Size(limbWidth, limbHeight)
     )
 
-    // Torso (Roblox block style)
+    // Torso (Roblox block style with skeletal spine)
     drawScope.drawRoundRect(
         color = bodyColor,
         topLeft = Offset(cx - torsoWidth / 2, cy - torsoHeight / 2),
@@ -977,15 +984,15 @@ private fun drawHumanoid3D(
         cornerRadius = CornerRadius(3f * scale, 3f * scale)
     )
 
-    // Arms
+    // Arms (Animated by skeletal shoulder joints)
     drawScope.drawRect(
         color = bodyColor,
-        topLeft = Offset(cx - torsoWidth / 2 - limbWidth - 1f, cy - torsoHeight / 2 + armAngle * 0.2f),
+        topLeft = Offset(cx - torsoWidth / 2 - limbWidth - 1f, cy - torsoHeight / 2 + leftArmBone.rotX * 10f * scale),
         size = Size(limbWidth, limbHeight * 0.85f)
     )
     drawScope.drawRect(
         color = bodyColor,
-        topLeft = Offset(cx + torsoWidth / 2 + 1f, cy - torsoHeight / 2 - armAngle * 0.2f),
+        topLeft = Offset(cx + torsoWidth / 2 + 1f, cy - torsoHeight / 2 + rightArmBone.rotX * 10f * scale),
         size = Size(limbWidth, limbHeight * 0.85f)
     )
 

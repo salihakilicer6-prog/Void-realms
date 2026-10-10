@@ -37,6 +37,14 @@ object WorldEngine {
             minLevel = 5,
             isSafeZone = false,
             ambientColor = Color(0xFF1F0918)
+        ),
+        ZoneInfo(
+            id = "abyssal_catacombs",
+            name = "Abyssal Catacombs",
+            description = "Procedural 3D dungeon with BSP rooms, vaults, and boss chambers.",
+            minLevel = 5,
+            isSafeZone = false,
+            ambientColor = Color(0xFF1E0F2B)
         )
     )
 
