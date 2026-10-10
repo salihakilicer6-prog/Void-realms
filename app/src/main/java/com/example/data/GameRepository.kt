@@ -1,6 +1,7 @@
 package com.example.data
 
 import com.example.engine.WorldEngine
+import com.example.engine.ProceduralDungeonEngine
 import com.example.model.*
 import com.example.network.CharacterSummary
 import com.example.network.GameApiClient
@@ -41,6 +42,12 @@ class GameRepository : GameNetworkListener {
     private val _enemies = MutableStateFlow<List<EnemyEntity>>(emptyList())
     val enemies: StateFlow<List<EnemyEntity>> = _enemies.asStateFlow()
 
+    private val _npcs = MutableStateFlow<List<NpcEntity>>(emptyList())
+    val npcs: StateFlow<List<NpcEntity>> = _npcs.asStateFlow()
+
+    private val _worldItems = MutableStateFlow<List<WorldItemDrop>>(emptyList())
+    val worldItems: StateFlow<List<WorldItemDrop>> = _worldItems.asStateFlow()
+
     private val _quests = MutableStateFlow<List<Quest>>(emptyList())
     val quests: StateFlow<List<Quest>> = _quests.asStateFlow()
 
@@ -67,16 +74,20 @@ class GameRepository : GameNetworkListener {
         p.equipment.clear()
         recalculateStats()
 
+        _npcs.value = WorldEngine.createInitialNpcs(p.zoneId)
+        _worldItems.value = WorldEngine.createInitialWorldItems(p.zoneId)
+        _enemies.value = WorldEngine.createInitialEnemies(p.zoneId)
+
         _chatMessages.value = listOf(
             ChatMessage(
                 id = "m_1",
                 sender = "SYSTEM",
                 role = UserRole.OWNER,
-                text = "Welcome to VOID REALMS. Authoritative multiplayer networking ready."
+                text = "Welcome to VOID REALMS. Explore 3D fantasy world, interact with NPCs and items."
             )
         )
 
-        recordAudit("CLIENT_INIT", "Client initialized. Connect to authoritative server.", "SUCCESS")
+        recordAudit("CLIENT_INIT", "Client initialized with 3D world assets.", "SUCCESS")
     }
 
     // --- REAL BACKEND AUTHENTICATION & MULTIPLAYER ACTIONS ---
@@ -385,7 +396,62 @@ class GameRepository : GameNetworkListener {
         p.posX = 0f
         p.posY = 0f
         _player.value = p.copy()
+
+        if (zoneId == "abyssal_catacombs") {
+            val dungeon = ProceduralDungeonEngine.generateDungeon(zoneId = zoneId)
+            _npcs.value = emptyList()
+            _worldItems.value = dungeon.itemDrops
+            _enemies.value = dungeon.enemySpawns.mapIndexed { idx: Int, spawn: Pair<Float, Float> ->
+                EnemyEntity(
+                    id = "dungeon_mob_$idx",
+                    definitionId = if (idx % 2 == 0) "rift_stalker" else "astral_golem",
+                    name = "Catacomb Guardian",
+                    level = 6,
+                    hp = 220,
+                    maxHp = 220,
+                    damage = 22,
+                    defense = 14,
+                    speed = 38f,
+                    zoneId = zoneId,
+                    posX = spawn.first,
+                    posY = spawn.second,
+                    aggroRange = 130f,
+                    attackRange = 45f
+                )
+            }
+        } else {
+            _npcs.value = WorldEngine.createInitialNpcs(zoneId)
+            _worldItems.value = WorldEngine.createInitialWorldItems(zoneId)
+            _enemies.value = WorldEngine.createInitialEnemies(zoneId)
+        }
         _serverMessage.value = "Entered ${WorldEngine.ZONES.find { it.id == zoneId }?.name}"
+    }
+
+    fun pickupWorldItem(itemId: String) {
+        val itemList = _worldItems.value.toMutableList()
+        val index = itemList.indexOfFirst { it.id == itemId && !it.isPickedUp }
+        if (index != -1) {
+            val drop = itemList[index]
+            drop.isPickedUp = true
+            _worldItems.value = itemList
+
+            val p = _player.value
+            val nextSlot = (0..24).firstOrNull { slot -> p.inventory.none { it.slotIndex == slot } } ?: 0
+            p.inventory.add(InventorySlot(nextSlot, drop.item, 1))
+            _player.value = p.copy()
+
+            addFloatingText(
+                FloatingCombatText(
+                    System.currentTimeMillis(),
+                    "+ ${drop.item.name}",
+                    drop.posX,
+                    drop.posY - 20f,
+                    true,
+                    drop.item.rarity.color
+                )
+            )
+            _serverMessage.value = "Picked up ${drop.item.name} (${drop.item.rarity.displayName})"
+        }
     }
 
     /**

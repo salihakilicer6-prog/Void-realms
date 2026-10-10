@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.engine.SkeletalAnimationEngine
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -17,10 +18,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
@@ -30,13 +34,43 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.GameRepository
 import com.example.engine.WorldEngine
-import com.example.model.EnemyEntity
-import com.example.model.PlayerStats
-import com.example.model.RemotePlayer
+import com.example.model.*
 import com.example.ui.components.ServerAccountDialog
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlin.math.*
+
+/**
+ * 3D Point projection helper for third-person perspective rendering.
+ */
+private data class ProjectedPoint(val x: Float, val y: Float, val scale: Float, val zDepth: Float)
+
+private fun project3D(
+    wx: Float, wy: Float, wz: Float,
+    camX: Float, camY: Float, camZ: Float,
+    pitchRad: Float,
+    screenWidth: Float, screenHeight: Float
+): ProjectedPoint {
+    val dx = wx - camX
+    val dy = wy - camY
+    val dz = wz - camZ
+
+    // Rotate around X-axis for pitch elevation
+    val cosP = cos(pitchRad)
+    val sinP = sin(pitchRad)
+
+    val rotY = dy * cosP - dz * sinP
+    val rotZ = dy * sinP + dz * cosP
+
+    val depth = max(rotY, 10f)
+    val focal = 380f
+    val scale = focal / depth
+
+    val projX = screenWidth / 2f + dx * scale
+    val projY = screenHeight * 0.52f - rotZ * scale
+
+    return ProjectedPoint(projX, projY, scale, depth)
+}
 
 @Composable
 fun WorldScreen(
@@ -45,12 +79,16 @@ fun WorldScreen(
 ) {
     val player by repository.player.collectAsState()
     val enemies by repository.enemies.collectAsState()
+    val npcs by repository.npcs.collectAsState()
+    val worldItems by repository.worldItems.collectAsState()
     val floatingTexts by repository.floatingTexts.collectAsState()
     val networkState by repository.networkState.collectAsState()
     val remotePlayers by repository.remotePlayers.collectAsState()
 
     var joystickOffset by remember { mutableStateOf(Offset.Zero) }
     var selectedEnemyId by remember { mutableStateOf<String?>(null) }
+    var selectedNpc by remember { mutableStateOf<NpcEntity?>(null) }
+    var nearbyItemDrop by remember { mutableStateOf<WorldItemDrop?>(null) }
     var slashEffectTimer by remember { mutableStateOf(0f) }
     var showZoneSelector by remember { mutableStateOf(false) }
     var showServerDialog by remember { mutableStateOf(false) }
@@ -60,27 +98,37 @@ fun WorldScreen(
     var comboCount by remember { mutableStateOf(0) }
     var lastHitAt by remember { mutableStateOf(0L) }
     var jumpTimer by remember { mutableStateOf(0f) }
-    var showStory by remember { mutableStateOf(false) }
-    var storyStep by remember { mutableStateOf(0) }
+    var walkAnimTimer by remember { mutableStateOf(0f) }
+    var cameraPitch by remember { mutableStateOf(0.85f) } // Pitch angle
 
     // Real-time game loop ticker (~30 FPS)
     LaunchedEffect(Unit) {
         while (true) {
             delay(33)
-            // Move player if joystick active
-            if (joystickOffset.getDistance() > 10f) {
-                val speed = (player.agility * 0.4f + 4.5f)
+            walkAnimTimer += 0.18f
+
+            // Move player smoothly with joystick
+            if (joystickOffset.getDistance() > 8f) {
+                val speed = (player.agility * 0.38f + 4.2f)
                 val len = joystickOffset.getDistance()
                 val nx = (joystickOffset.x / len) * speed
                 val ny = (joystickOffset.y / len) * speed
-                val newX = (player.posX + nx).coerceIn(-280f, 280f)
-                val newY = (player.posY + ny).coerceIn(-280f, 280f)
-                repository.updatePlayerPosition(newX, newY)
+
+                val (nextX, nextY) = WorldEngine.checkMovementCollision(
+                    player.posX, player.posY,
+                    player.posX + nx, player.posY + ny
+                )
+                repository.updatePlayerPosition(nextX, nextY)
             }
 
             // Update enemy AI in world when offline
             if (!networkState.isAuthenticated) {
                 WorldEngine.updateEnemyAI(enemies, player.posX, player.posY, 0.033f)
+            }
+
+            // Check nearby items for pickup prompt
+            nearbyItemDrop = worldItems.firstOrNull { item ->
+                !item.isPickedUp && hypot(item.posX - player.posX, item.posY - player.posY) < 45f
             }
 
             // Prune floating combat numbers
@@ -105,32 +153,37 @@ fun WorldScreen(
             .fillMaxSize()
             .background(VoidBlack)
     ) {
-        val screenCenterX = constraints.maxWidth / 2
-        val screenCenterY = constraints.maxHeight / 2
+        val screenWidth = constraints.maxWidth.toFloat()
+        val screenHeight = constraints.maxHeight.toFloat()
+        val screenCenterX = screenWidth / 2f
+        val screenCenterY = screenHeight / 2f
 
-        // 1. The World Canvas
+        val currentZone = WorldEngine.ZONES.find { it.id == player.zoneId } ?: WorldEngine.ZONES[0]
+
+        // 1. 3D World Canvas
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { start ->
-                            // A short touch on the world selects the nearest enemy.
-                            val center = Offset(size.width / 2f, size.height / 2f)
-                            val worldX = player.posX + (start.x - center.x)
-                            val worldY = player.posY + (start.y - center.y)
+                            // Touch select enemy or NPC
+                            val worldX = player.posX + (start.x - screenCenterX) * 0.8f
+                            val worldY = player.posY + (start.y - screenCenterY) * 0.8f
+
+                            // Priority 1: Enemy selection
                             selectedEnemyId = enemies
                                 .filter { !it.isDead }
-                                .minByOrNull {
-                                    val dx = it.posX - worldX
-                                    val dy = it.posY - worldY
-                                    dx * dx + dy * dy
+                                .minByOrNull { hypot(it.posX - worldX, it.posY - worldY) }
+                                ?.takeIf { hypot(it.posX - worldX, it.posY - worldY) <= 80f }?.id
+
+                            // Priority 2: NPC dialogue trigger
+                            if (selectedEnemyId == null) {
+                                val npcNear = npcs.minByOrNull { hypot(it.posX - player.posX, it.posY - player.posY) }
+                                if (npcNear != null && hypot(npcNear.posX - player.posX, npcNear.posY - player.posY) <= 65f) {
+                                    selectedNpc = npcNear
                                 }
-                                ?.takeIf {
-                                    val dx = it.posX - worldX
-                                    val dy = it.posY - worldY
-                                    dx * dx + dy * dy <= 80f * 80f
-                                }?.id
+                            }
                         },
                         onDragEnd = { joystickOffset = Offset.Zero },
                         onDragCancel = { joystickOffset = Offset.Zero },
@@ -143,234 +196,354 @@ fun WorldScreen(
                     )
                 }
         ) {
-            val center = Offset(size.width / 2f, size.height * 0.58f)
+            val playerZ = if (jumpTimer > 0f) sin((1f - jumpTimer) * PI).toFloat() * 28f else 0f
+            val camX = player.posX
+            val camY = player.posY - 140f
+            val camZ = 120f + playerZ
 
-            // V5: third-person-like mobile framing. The avatar stays near the lower
-            // center while the world scrolls around it, matching the feel of
-            // character-driven Roblox adventure games without copying their IP.
-            // V4 visual direction: colorful, clean, blocky low-poly fantasy.
-            // Gameplay remains the same: top-down RPG combat, quests and multiplayer.
-            val grass = Color(0xFF79B84A)
-            val grassLight = Color(0xFF8DCC59)
-            val grassDark = Color(0xFF5B963B)
-            val path = Color(0xFFC9A86A)
-            val sky = Color(0xFF9BD8FF)
-            drawRect(color = sky, size = size)
-            drawRect(color = grass, topLeft = Offset(0f, size.height * 0.18f), size = Size(size.width, size.height * 0.82f))
-
-            // Large simple terrain tiles.
-            val tile = 56f
-            val sx = ((center.x - player.posX) % tile) - tile
-            val sy = ((center.y - player.posY) % tile) - tile
-            var tx = sx
-            while (tx < size.width + tile) {
-                var ty = sy
-                while (ty < size.height + tile) {
-                    val worldX = tx - center.x + player.posX
-                    val worldY = ty - center.y + player.posY
-                    val checker = (floor(worldX / tile) + floor(worldY / tile)).toInt() and 1
-                    drawRect(
-                        color = if (checker == 0) grass else grassLight,
-                        topLeft = Offset(tx, ty.coerceAtLeast(size.height * 0.18f)),
-                        size = Size(tile + 1f, tile + 1f)
+            // Atmospheric Sky Gradient
+            drawRect(
+                brush = Brush.verticalGradient(
+                    listOf(
+                        currentZone.ambientColor,
+                        Color(0xFF1E293B),
+                        Color(0xFF334155)
                     )
-                    ty += tile
-                }
-                tx += tile
-            }
-
-            // A readable village/path strip gives the world a Roblox-like toy-map feel.
-            val pathY = center.y - player.posY * 0.35f
-            drawRect(color = path, topLeft = Offset(0f, pathY - 34f), size = Size(size.width, 68f))
-            var stoneX = ((center.x - player.posX) % 46f) - 46f
-            while (stoneX < size.width) {
-                drawRoundRect(
-                    color = Color(0xFFD9BD82),
-                    topLeft = Offset(stoneX + 5f, pathY - 7f),
-                    size = Size(34f, 14f),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(5f, 5f)
-                )
-                stoneX += 46f
-            }
-
-            // Decorative blocky trees and rocks. They are visual only.
-            val decorSeed = floor(player.posX / 100f) + floor(player.posY / 100f)
-            for (i in 0 until 14) {
-                val dx = ((i * 137 + decorSeed.toInt() * 31) % size.width.toInt()).toFloat()
-                val dy = (size.height * 0.24f + ((i * 83) % (size.height.toInt().coerceAtLeast(1) / 2))).toFloat()
-                drawRect(color = Color(0xFF8B5A32), topLeft = Offset(dx - 4f, dy + 12f), size = Size(8f, 22f))
-                drawCircle(color = Color(0xFF3F8F3A), radius = 19f, center = Offset(dx, dy))
-                drawCircle(color = Color(0xFF5EAD45), radius = 13f, center = Offset(dx - 5f, dy - 6f))
-            }
-
-            // World border is a subtle map edge instead of a neon sci-fi ring.
-            val boundaryRadius = 320f
-            drawCircle(
-                color = Color.White.copy(alpha = 0.45f),
-                radius = boundaryRadius,
-                center = Offset(center.x - player.posX, center.y - player.posY),
-                style = Stroke(width = 4f)
+                ),
+                size = size
             )
 
-            // Draw Enemies
+            // Horizon line projection
+            val horizonProj = project3D(camX, camY + 800f, 0f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+            val horizonY = horizonProj.y.coerceIn(0f, screenHeight * 0.4f)
+
+            // 3D Terrain Elevation Mesh & Ground Tiles
+            val tileSize = 40f
+            val gridRadius = 10
+            val startTileX = (floor(player.posX / tileSize) - gridRadius).toInt()
+            val endTileX = (floor(player.posX / tileSize) + gridRadius).toInt()
+            val startTileY = (floor(player.posY / tileSize) - gridRadius).toInt()
+            val endTileY = (floor(player.posY / tileSize) + gridRadius).toInt()
+
+            for (ty in startTileY..endTileY) {
+                for (tx in startTileX..endTileX) {
+                    val wx1 = tx * tileSize
+                    val wy1 = ty * tileSize
+                    val wz1 = WorldEngine.getTerrainHeight(wx1, wy1)
+
+                    val wx2 = wx1 + tileSize
+                    val wy2 = wy1 + tileSize
+                    val wz2 = WorldEngine.getTerrainHeight(wx2, wy2)
+
+                    val p1 = project3D(wx1, wy1, wz1, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                    val p2 = project3D(wx2, wy1, wz1, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                    val p3 = project3D(wx2, wy2, wz2, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                    val p4 = project3D(wx1, wy2, wz2, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+
+                    if (p1.zDepth > 0 && p2.zDepth > 0 && p3.zDepth > 0 && p4.zDepth > 0) {
+                        val pathStyle = (abs(wx1) < 40f && abs(wy1) < 160f)
+                        val isMountain = (wz1 > 8f)
+                        val tileColor = when {
+                            pathStyle -> Color(0xFFD97706)
+                            isMountain -> Color(0xFF64748B)
+                            (tx + ty) % 2 == 0 -> Color(0xFF15803D)
+                            else -> Color(0xFF166534)
+                        }
+
+                        val poly = Path().apply {
+                            moveTo(p1.x, p1.y)
+                            lineTo(p2.x, p2.y)
+                            lineTo(p3.x, p3.y)
+                            lineTo(p4.x, p4.y)
+                            close()
+                        }
+                        drawPath(poly, color = tileColor)
+                        drawPath(poly, color = tileColor.copy(alpha = 0.3f), style = Stroke(width = 1f))
+                    }
+                }
+            }
+
+            // 3D Ancient Ruins & Obelisks
+            val ruinLocations = listOf(
+                Pair(-80f, -80f), Pair(90f, -90f), Pair(-100f, 100f), Pair(110f, 80f)
+            )
+            for ((rx, ry) in ruinLocations) {
+                val rHeight = 35f
+                val baseP = project3D(rx, ry, 0f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                val topP = project3D(rx, ry, rHeight, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+
+                if (baseP.zDepth > 0 && topP.zDepth > 0) {
+                    val w = 14f * baseP.scale
+                    val h = (baseP.y - topP.y)
+                    drawRect(
+                        color = Color(0xFF475569),
+                        topLeft = Offset(baseP.x - w / 2, topP.y),
+                        size = Size(w, h)
+                    )
+                    drawRect(
+                        color = Color(0xFF94A3B8),
+                        topLeft = Offset(baseP.x - w / 2, topP.y),
+                        size = Size(w * 0.35f, h)
+                    )
+                    drawCircle(
+                        color = NeonCyan.copy(alpha = 0.75f),
+                        radius = 6f * topP.scale,
+                        center = Offset(baseP.x, topP.y - 4f)
+                    )
+                }
+            }
+
+            // 3D Trees with Layered Canopies
+            val treeLocations = listOf(
+                Pair(-160f, -40f), Pair(-180f, 60f), Pair(150f, -50f), Pair(170f, 70f),
+                Pair(-50f, -180f), Pair(60f, -170f), Pair(-70f, 180f), Pair(80f, 170f)
+            )
+            for ((tx, ty) in treeLocations) {
+                val trunkP = project3D(tx, ty, 0f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                val topP = project3D(tx, ty, 42f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+
+                if (trunkP.zDepth > 0 && topP.zDepth > 0) {
+                    val tw = 8f * trunkP.scale
+                    val th = (trunkP.y - topP.y)
+                    drawRect(
+                        color = Color(0xFF78350F),
+                        topLeft = Offset(trunkP.x - tw / 2, topP.y + th * 0.3f),
+                        size = Size(tw, th * 0.7f)
+                    )
+                    drawCircle(
+                        color = Color(0xFF14532D),
+                        radius = 22f * topP.scale,
+                        center = Offset(trunkP.x, topP.y + th * 0.2f)
+                    )
+                    drawCircle(
+                        color = Color(0xFF16A34A),
+                        radius = 16f * topP.scale,
+                        center = Offset(trunkP.x - 3f, topP.y + th * 0.1f)
+                    )
+                }
+            }
+
+            // 3D World Item Drops
+            for (drop in worldItems) {
+                if (drop.isPickedUp) continue
+
+                val itemP = project3D(drop.posX, drop.posY, 8f + sin(walkAnimTimer * 2f) * 3f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                if (itemP.zDepth > 0) {
+                    val itemSize = 14f * itemP.scale
+
+                    drawCircle(
+                        color = drop.item.rarity.color.copy(alpha = 0.35f),
+                        radius = itemSize * 1.6f,
+                        center = Offset(itemP.x, itemP.y)
+                    )
+                    drawRoundRect(
+                        color = drop.item.rarity.color,
+                        topLeft = Offset(itemP.x - itemSize / 2, itemP.y - itemSize / 2),
+                        size = Size(itemSize, itemSize),
+                        cornerRadius = CornerRadius(4f, 4f)
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = itemSize * 0.25f,
+                        center = Offset(itemP.x, itemP.y)
+                    )
+                }
+            }
+
+            // 3D Humanoid NPCs
+            for (npc in npcs) {
+                val npcP = project3D(npc.posX, npc.posY, 0f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                if (npcP.zDepth > 0) {
+                    drawHumanoid3D(
+                        drawScope = this,
+                        proj = npcP,
+                        bodyColor = npc.outfitColor,
+                        headColor = npc.primaryColor,
+                        walkPhase = 0f,
+                        isMoving = false
+                    )
+                }
+            }
+
+            // 3D Mobs / Enemies
             for (enemy in enemies) {
                 if (enemy.isDead) continue
 
-                val enemyScreenPos = Offset(
-                    center.x + (enemy.posX - player.posX),
-                    center.y + (enemy.posY - player.posY)
-                )
+                val enemyP = project3D(enemy.posX, enemy.posY, 0f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                if (enemyP.zDepth > 0) {
+                    val mobColor = when (enemy.definitionId) {
+                        "abyssal_lord" -> Color(0xFF7C3AED)
+                        "astral_golem" -> Color(0xFF475569)
+                        "rift_stalker" -> Color(0xFF2563EB)
+                        else -> Color(0xFFDC2626)
+                    }
 
-                // Skip drawing if outside viewport
-                if (enemyScreenPos.x < -40 || enemyScreenPos.x > size.width + 40 ||
-                    enemyScreenPos.y < -40 || enemyScreenPos.y > size.height + 40) {
-                    continue
-                }
+                    if (selectedEnemyId == enemy.id) {
+                        drawCircle(
+                            color = VoidGold,
+                            radius = 24f * enemyP.scale,
+                            center = Offset(enemyP.x, enemyP.y),
+                            style = Stroke(width = 3f)
+                        )
+                    }
 
-                // Soft aggro range; no neon sci-fi presentation.
-                drawCircle(
-                    color = Color(0xFFFF6B6B).copy(alpha = 0.035f),
-                    radius = enemy.aggroRange,
-                    center = enemyScreenPos
-                )
+                    drawHumanoid3D(
+                        drawScope = this,
+                        proj = enemyP,
+                        bodyColor = mobColor,
+                        headColor = Color(0xFF1E293B),
+                        walkPhase = walkAnimTimer,
+                        isMoving = true
+                    )
 
-                // Enemy body
-                val enemyColor = when (enemy.definitionId) {
-                    "abyssal_lord" -> Color(0xFF7A3E9D)
-                    "astral_golem" -> Color(0xFF7A7F86)
-                    "rift_stalker" -> Color(0xFF3D79D8)
-                    else -> Color(0xFFD9534F)
-                }
-                val enemyRadius = if (enemy.definitionId == "abyssal_lord") 24f else 17f
-
-                // Blocky toy-like enemy silhouette.
-                if (selectedEnemyId == enemy.id) {
-                    drawRoundRect(
-                        color = Color(0xFFFFD54F),
-                        topLeft = Offset(enemyScreenPos.x - enemyRadius - 6f, enemyScreenPos.y - enemyRadius - 6f),
-                        size = Size((enemyRadius + 6f) * 2f, (enemyRadius + 6f) * 2f),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(7f, 7f),
-                        style = Stroke(width = 3f)
+                    val hpRatio = (enemy.hp.toFloat() / enemy.maxHp.toFloat()).coerceIn(0f, 1f)
+                    val barW = 34f * enemyP.scale
+                    val barH = 5f * enemyP.scale
+                    drawRect(
+                        color = Color.Black,
+                        topLeft = Offset(enemyP.x - barW / 2, enemyP.y - 45f * enemyP.scale),
+                        size = Size(barW, barH)
+                    )
+                    drawRect(
+                        color = VoidCrimson,
+                        topLeft = Offset(enemyP.x - barW / 2, enemyP.y - 45f * enemyP.scale),
+                        size = Size(barW * hpRatio, barH)
                     )
                 }
-                drawRoundRect(
-                    color = enemyColor,
-                    topLeft = Offset(enemyScreenPos.x - enemyRadius, enemyScreenPos.y - enemyRadius),
-                    size = Size(enemyRadius * 2f, enemyRadius * 2f),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(5f, 5f)
-                )
-                drawRect(
-                    color = Color(0xFF20242A),
-                    topLeft = Offset(enemyScreenPos.x - enemyRadius * 0.52f, enemyScreenPos.y - enemyRadius * 0.15f),
-                    size = Size(enemyRadius * 0.22f, enemyRadius * 0.22f)
-                )
-                drawRect(
-                    color = Color(0xFF20242A),
-                    topLeft = Offset(enemyScreenPos.x + enemyRadius * 0.30f, enemyScreenPos.y - enemyRadius * 0.15f),
-                    size = Size(enemyRadius * 0.22f, enemyRadius * 0.22f)
-                )
-
-                // Enemy HP Bar overhead
-                val hpBarWidth = 40f
-                val hpBarHeight = 5f
-                val hpRatio = (enemy.hp.toFloat() / enemy.maxHp.toFloat()).coerceIn(0f, 1f)
-                drawRect(
-                    color = Color.Black,
-                    topLeft = Offset(enemyScreenPos.x - hpBarWidth / 2, enemyScreenPos.y - enemyRadius - 14f),
-                    size = Size(hpBarWidth, hpBarHeight)
-                )
-                drawRect(
-                    color = VoidCrimson,
-                    topLeft = Offset(enemyScreenPos.x - hpBarWidth / 2, enemyScreenPos.y - enemyRadius - 14f),
-                    size = Size(hpBarWidth * hpRatio, hpBarHeight)
-                )
             }
 
-            // Draw Remote Multiplayer Players
+            // 3D Remote Multiplayer Players
             for (remote in remotePlayers) {
-                val remoteScreenPos = Offset(
-                    center.x + (remote.posX - player.posX),
-                    center.y + (remote.posY - player.posY)
-                )
-
-                // Remote aura
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        listOf(NeonCyan.copy(alpha = 0.4f), Color.Transparent),
-                        center = remoteScreenPos,
-                        radius = 28f
-                    ),
-                    radius = 28f,
-                    center = remoteScreenPos
-                )
-
-                // Remote body
-                drawCircle(
-                    color = NeonCyan,
-                    radius = 15f,
-                    center = remoteScreenPos
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = 5f,
-                    center = remoteScreenPos
-                )
-
-                // Remote HP Bar
-                val rBarWidth = 36f
-                val rBarHeight = 4f
-                val rRatio = (remote.hp.toFloat() / remote.maxHp.toFloat()).coerceIn(0f, 1f)
-                drawRect(
-                    color = Color.Black,
-                    topLeft = Offset(remoteScreenPos.x - rBarWidth / 2, remoteScreenPos.y - 22f),
-                    size = Size(rBarWidth, rBarHeight)
-                )
-                drawRect(
-                    color = NeonGreen,
-                    topLeft = Offset(remoteScreenPos.x - rBarWidth / 2, remoteScreenPos.y - 22f),
-                    size = Size(rBarWidth * rRatio, rBarHeight)
-                )
+                val remoteP = project3D(remote.posX, remote.posY, 0f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                if (remoteP.zDepth > 0) {
+                    drawHumanoid3D(
+                        drawScope = this,
+                        proj = remoteP,
+                        bodyColor = NeonCyan,
+                        headColor = Color.White,
+                        walkPhase = walkAnimTimer,
+                        isMoving = true
+                    )
+                }
             }
 
-            // V5 player avatar: larger third-person block character with a shadow and
-            // directional body tilt. This is a visual/control language, not Roblox code.
-            val jumpLift = if (jumpTimer > 0f) sin((1f - jumpTimer) * PI).toFloat() * 34f else 0f
-            val avatarY = center.y - jumpLift
-            val faceX = when { joystickOffset.x > 12f -> 1f; joystickOffset.x < -12f -> -1f; else -> 0f }
-            drawOval(
-                color = Color.Black.copy(alpha = 0.28f),
-                topLeft = Offset(center.x - 23f, center.y + 27f),
-                size = Size(46f, 13f)
-            )
-            drawRoundRect(
-                color = Color(0xFF4A90E2),
-                topLeft = Offset(center.x - 18f, avatarY - 1f),
-                size = Size(36f, 31f),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f)
-            )
-            drawRect(color = Color(0xFF2D5F9A), topLeft = Offset(center.x - 14f, avatarY + 29f), size = Size(10f, 17f))
-            drawRect(color = Color(0xFF2D5F9A), topLeft = Offset(center.x + 4f, avatarY + 29f), size = Size(10f, 17f))
-            drawRect(color = Color(0xFFF0C39B), topLeft = Offset(center.x - 15f, avatarY - 30f), size = Size(30f, 24f))
-            drawRect(color = Color(0xFF3B2A20), topLeft = Offset(center.x - 15f, avatarY - 32f), size = Size(30f, 7f))
-            val eyeOffset = if (faceX == 0f) 0f else faceX * 3f
-            drawRect(color = Color(0xFF20242A), topLeft = Offset(center.x - 9f + eyeOffset, avatarY - 19f), size = Size(5f, 5f))
-            drawRect(color = Color(0xFF20242A), topLeft = Offset(center.x + 4f + eyeOffset, avatarY - 19f), size = Size(5f, 5f))
+            // 3D Local Player Avatar (Humanoid Roblox Style)
+            val isPlayerMoving = joystickOffset.getDistance() > 8f
+            val playerP = project3D(player.posX, player.posY, playerZ, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
 
-            // Slash arc attack visual effect
-            if (slashEffectTimer > 0f) {
-                drawArc(
-                    color = NeonCyan.copy(alpha = slashEffectTimer),
-                    startAngle = -45f,
-                    sweepAngle = 90f,
-                    useCenter = false,
-                    topLeft = Offset(center.x - 35f, center.y - 35f),
-                    size = Size(70f, 70f),
-                    style = Stroke(width = 5f)
+            if (playerP.zDepth > 0) {
+                // Shadow
+                drawOval(
+                    color = Color.Black.copy(alpha = 0.35f),
+                    topLeft = Offset(playerP.x - 22f * playerP.scale, playerP.y + 2f),
+                    size = Size(44f * playerP.scale, 14f * playerP.scale)
                 )
+
+                // Humanoid Roblox Avatar
+                drawHumanoid3D(
+                    drawScope = this,
+                    proj = playerP,
+                    bodyColor = Color(0xFF2563EB),
+                    headColor = Color(0xFFFDE047),
+                    walkPhase = if (isPlayerMoving) walkAnimTimer else 0f,
+                    isMoving = isPlayerMoving
+                )
+
+                // Slash Attack Arc
+                if (slashEffectTimer > 0f) {
+                    drawArc(
+                        color = NeonCyan.copy(alpha = slashEffectTimer),
+                        startAngle = -60f,
+                        sweepAngle = 120f,
+                        useCenter = false,
+                        topLeft = Offset(playerP.x - 45f * playerP.scale, playerP.y - 45f * playerP.scale),
+                        size = Size(90f * playerP.scale, 90f * playerP.scale),
+                        style = Stroke(width = 6f)
+                    )
+                }
             }
         }
 
-        // 2. Combat HUD
+        // 2. Overlays: NPC Nametags, World Item Names & Remote Player Nametags
+        Box(modifier = Modifier.fillMaxSize()) {
+            val camX = player.posX
+            val camY = player.posY - 140f
+            val camZ = 120f
+
+            // Floating Combat Numbers
+            floatingTexts.forEach { ft ->
+                val ftP = project3D(ft.x, ft.y, 10f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                if (ftP.zDepth > 0) {
+                    Text(
+                        text = ft.text,
+                        color = ft.color,
+                        fontWeight = if (ft.isCrit) FontWeight.ExtraBold else FontWeight.Bold,
+                        fontSize = if (ft.isCrit) 18.sp else 14.sp,
+                        modifier = Modifier.offset {
+                            IntOffset(ftP.x.toInt(), ftP.y.toInt())
+                        }
+                    )
+                }
+            }
+
+            // NPC Names and Roles Overhead
+            npcs.forEach { npc ->
+                val npcP = project3D(npc.posX, npc.posY, 40f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                if (npcP.zDepth > 0) {
+                    val dist = hypot(npc.posX - player.posX, npc.posY - player.posY)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.offset { IntOffset((npcP.x - 50f).toInt(), (npcP.y - 40f).toInt()) }
+                    ) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.75f),
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, npc.primaryColor)
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(npc.name, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(npc.title, color = npc.primaryColor, fontSize = 8.sp)
+                            }
+                        }
+                        if (dist <= 65f) {
+                            Text("Tap [Interact]", color = NeonYellow, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
+            }
+
+            // World Item Drops Overhead
+            worldItems.forEach { drop ->
+                if (!drop.isPickedUp) {
+                    val dropP = project3D(drop.posX, drop.posY, 20f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                    if (dropP.zDepth > 0) {
+                        Text(
+                            text = drop.item.name,
+                            color = drop.item.rarity.color,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.offset { IntOffset((dropP.x - 30f).toInt(), (dropP.y - 20f).toInt()) }
+                        )
+                    }
+                }
+            }
+
+            // Remote Players
+            remotePlayers.forEach { remote ->
+                val remP = project3D(remote.posX, remote.posY, 40f, camX, camY, camZ, cameraPitch, screenWidth, screenHeight)
+                if (remP.zDepth > 0) {
+                    Text(
+                        text = "${remote.name} (Lv${remote.level})",
+                        color = NeonCyan,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.offset { IntOffset((remP.x - 35f).toInt(), (remP.y - 30f).toInt()) }
+                    )
+                }
+            }
+        }
+
+        // 3. Combat HUD (Top Center)
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -380,10 +553,10 @@ fun WorldScreen(
             val hpRatio = (player.hp.toFloat() / player.maxHp.coerceAtLeast(1)).coerceIn(0f, 1f)
             Box(
                 modifier = Modifier
-                    .width(190.dp)
-                    .height(9.dp)
+                    .width(200.dp)
+                    .height(10.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black.copy(alpha = 0.8f))
+                    .background(Color.Black.copy(alpha = 0.85f))
                     .border(1.dp, VoidOutline, RoundedCornerShape(8.dp))
             ) {
                 Box(
@@ -396,12 +569,12 @@ fun WorldScreen(
             Text(
                 text = "${player.hp} / ${player.maxHp} HP  •  LV ${player.level}",
                 color = Color.White,
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
             )
             val xpRequired = player.level * player.level * 100L
             val xpRatio = if (xpRequired > 0) (player.xp.toFloat() / xpRequired).coerceIn(0f, 1f) else 0f
-            Box(modifier = Modifier.width(190.dp).height(4.dp).clip(RoundedCornerShape(4.dp)).background(Color.Black)) {
+            Box(modifier = Modifier.width(200.dp).height(4.dp).clip(RoundedCornerShape(4.dp)).background(Color.Black)) {
                 Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(xpRatio).background(XpGreen))
             }
             Text(
@@ -421,7 +594,7 @@ fun WorldScreen(
                     Surface(
                         color = VoidDark.copy(alpha = 0.92f),
                         shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, VoidCrimson.copy(alpha = 0.7f))
+                        border = BorderStroke(1.dp, VoidCrimson.copy(alpha = 0.8f))
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("${target.name}  •  LV ${target.level}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -434,41 +607,7 @@ fun WorldScreen(
             }
         }
 
-        // 3. Floating Combat Numbers & Remote Player Name Overlays
-        Box(modifier = Modifier.fillMaxSize()) {
-            floatingTexts.forEach { ft ->
-                Text(
-                    text = ft.text,
-                    color = ft.color,
-                    fontWeight = if (ft.isCrit) FontWeight.ExtraBold else FontWeight.Bold,
-                    fontSize = if (ft.isCrit) 18.sp else 14.sp,
-                    modifier = Modifier.offset {
-                        IntOffset(
-                            (screenCenterX + (ft.x - player.posX)).toInt(),
-                            (screenCenterY + (ft.y - player.posY)).toInt()
-                        )
-                    }
-                )
-            }
-
-            // Remote Player Nametags
-            remotePlayers.forEach { remote ->
-                Text(
-                    text = "${remote.name} (Lv${remote.level})",
-                    color = NeonCyan,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.offset {
-                        IntOffset(
-                            (screenCenterX + (remote.posX - player.posX) - 35).toInt(),
-                            (screenCenterY + (remote.posY - player.posY) - 38).toInt()
-                        )
-                    }
-                )
-            }
-        }
-
-        // 4. Top Control Bar: Zone Fast Travel + Multiplayer Server Status
+        // 4. Top Control Bar & World Objective Tracker
         Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -491,14 +630,13 @@ fun WorldScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = WorldEngine.ZONES.find { it.id == player.zoneId }?.name ?: "Realm",
+                    text = currentZone.name,
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            // Real Server Status Button
             Button(
                 onClick = { showServerDialog = true },
                 colors = ButtonDefaults.buttonColors(
@@ -524,53 +662,35 @@ fun WorldScreen(
             }
         }
 
-        // V5 main-story tracker: the world now has its own narrative identity.
-        Surface(
-            modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 12.dp).widthIn(max = 235.dp),
-            color = Color.Black.copy(alpha = 0.62f),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, Color(0xFF6FA8FF).copy(alpha = 0.45f))
-        ) {
-            Column(modifier = Modifier.padding(10.dp)) {
-                Text("VOID REALMS", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
-                Text("MAIN STORY", color = Color(0xFFFFD166), fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    if (storyStep == 0) "Find the first Void Gate." else "The gate has awakened. Enter the Wastes.",
-                    color = Color.White, fontSize = 10.sp
-                )
-            }
-        }
-
         // 5. Minimap Radar (Top-Right)
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(12.dp)
-                .size(72.dp)
+                .size(76.dp)
                 .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.92f))
-                .border(1.5.dp, Color(0xFF5D6875), CircleShape)
+                .background(Color.Black.copy(alpha = 0.8f))
+                .border(1.5.dp, VoidOutline, CircleShape)
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val rCenter = Offset(size.width / 2f, size.height / 2f)
-                // Local player dot
-                drawCircle(color = Color(0xFF2F80ED), radius = 3.5f, center = rCenter)
+                drawCircle(color = NeonCyan, radius = 3.5f, center = rCenter)
 
-                // Remote players on radar
-                for (remote in remotePlayers) {
-                    val rx = rCenter.x + (remote.posX - player.posX) * 0.15f
-                    val ry = rCenter.y + (remote.posY - player.posY) * 0.15f
-                    if ((rx - rCenter.x).pow(2) + (ry - rCenter.y).pow(2) <= (size.width / 2f).pow(2)) {
-                        drawCircle(color = NeonGreen, radius = 3f, center = Offset(rx, ry))
+                // NPCs
+                for (npc in npcs) {
+                    val rx = rCenter.x + (npc.posX - player.posX) * 0.18f
+                    val ry = rCenter.y + (npc.posY - player.posY) * 0.18f
+                    if (hypot(rx - rCenter.x, ry - rCenter.y) <= size.width / 2f) {
+                        drawCircle(color = NeonYellow, radius = 3f, center = Offset(rx, ry))
                     }
                 }
 
-                // Enemies on radar
+                // Enemies
                 for (enemy in enemies) {
                     if (enemy.isDead) continue
-                    val ex = rCenter.x + (enemy.posX - player.posX) * 0.15f
-                    val ey = rCenter.y + (enemy.posY - player.posY) * 0.15f
-                    if ((ex - rCenter.x).pow(2) + (ey - rCenter.y).pow(2) <= (size.width / 2f).pow(2)) {
+                    val ex = rCenter.x + (enemy.posX - player.posX) * 0.18f
+                    val ey = rCenter.y + (enemy.posY - player.posY) * 0.18f
+                    if (hypot(ex - rCenter.x, ey - rCenter.y) <= size.width / 2f) {
                         drawCircle(color = VoidCrimson, radius = 2.5f, center = Offset(ex, ey))
                     }
                 }
@@ -584,14 +704,14 @@ fun WorldScreen(
                 .padding(start = 24.dp, bottom = 28.dp)
                 .size(110.dp)
                 .clip(CircleShape)
-                .background(VoidDark.copy(alpha = 0.6f))
+                .background(VoidDark.copy(alpha = 0.65f))
                 .border(1.5.dp, VoidOutline, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             Box(
                 modifier = Modifier
                     .offset { IntOffset(joystickOffset.x.toInt(), joystickOffset.y.toInt()) }
-                    .size(45.dp)
+                    .size(46.dp)
                     .clip(CircleShape)
                     .background(
                         Brush.radialGradient(
@@ -602,7 +722,7 @@ fun WorldScreen(
             )
         }
 
-        // V5: jump + interact controls make movement feel like a character adventure game.
+        // 7. Mobile Gameplay Action Buttons (Jump, Interact, Attack, Spell, Dodge, Potion)
         Row(
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 178.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -611,31 +731,38 @@ fun WorldScreen(
                 onClick = {
                     if (!player.isDead && jumpTimer <= 0f) jumpTimer = 1f
                 },
-                containerColor = VoidDark.copy(alpha = 0.92f),
+                containerColor = VoidDark.copy(alpha = 0.9f),
                 contentColor = Color.White,
                 modifier = Modifier.size(50.dp),
                 shape = CircleShape
             ) {
                 Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Jump")
             }
+
+            // Universal Interaction Button (Talk to NPC or Pickup Item)
             FloatingActionButton(
                 onClick = {
-                    selectedEnemyId = enemies.filter { !it.isDead }.minByOrNull {
-                        val dx = it.posX - player.posX; val dy = it.posY - player.posY
-                        dx * dx + dy * dy
-                    }?.id
-                    showStory = true
+                    nearbyItemDrop?.let { drop ->
+                        repository.pickupWorldItem(drop.id)
+                    } ?: run {
+                        val npcNear = npcs.minByOrNull { hypot(it.posX - player.posX, it.posY - player.posY) }
+                        if (npcNear != null && hypot(npcNear.posX - player.posX, npcNear.posY - player.posY) <= 65f) {
+                            selectedNpc = npcNear
+                        }
+                    }
                 },
-                containerColor = Color(0xFF2F6F52),
+                containerColor = if (nearbyItemDrop != null) NeonYellow else Color(0xFF2F6F52),
                 contentColor = Color.White,
                 modifier = Modifier.size(50.dp),
                 shape = CircleShape
             ) {
-                Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Interact")
+                Icon(
+                    imageVector = if (nearbyItemDrop != null) Icons.Default.Backpack else Icons.Default.ChatBubbleOutline,
+                    contentDescription = "Interact"
+                )
             }
         }
 
-        // 7. Action Combat Buttons (Bottom-Right)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -643,7 +770,6 @@ fun WorldScreen(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Quick Heal Potion button
             FloatingActionButton(
                 onClick = { repository.usePotion() },
                 containerColor = VoidDark,
@@ -665,11 +791,12 @@ fun WorldScreen(
                             val dx = if (joystickOffset.getDistance() > 10f) joystickOffset.x else 0f
                             val dy = if (joystickOffset.getDistance() > 10f) joystickOffset.y else -1f
                             val len = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
-                            val dash = 42f
-                            repository.updatePlayerPosition(
-                                (player.posX + dx / len * dash).coerceIn(-280f, 280f),
-                                (player.posY + dy / len * dash).coerceIn(-280f, 280f)
+                            val dash = 45f
+                            val (nx, ny) = WorldEngine.checkMovementCollision(
+                                player.posX, player.posY,
+                                player.posX + dx / len * dash, player.posY + dy / len * dash
                             )
+                            repository.updatePlayerPosition(nx, ny)
                         }
                     },
                     containerColor = VoidSurface,
@@ -680,17 +807,12 @@ fun WorldScreen(
                     Icon(Icons.Default.DirectionsRun, contentDescription = "Dodge", tint = NeonGreen)
                 }
 
-                // Ranged Void Blast Spell Button
                 FloatingActionButton(
                     onClick = {
                         val now = System.currentTimeMillis()
                         if (now - lastAttackAt >= 1200L) {
                             val target = enemies.firstOrNull { it.id == selectedEnemyId && !it.isDead }
-                                ?: enemies.filter { !it.isDead }.minByOrNull {
-                                    val dx = it.posX - player.posX
-                                    val dy = it.posY - player.posY
-                                    dx * dx + dy * dy
-                                }
+                                ?: enemies.filter { !it.isDead }.minByOrNull { hypot(it.posX - player.posX, it.posY - player.posY) }
                             if (target != null) {
                                 selectedEnemyId = target.id
                                 lastAttackAt = now
@@ -708,24 +830,18 @@ fun WorldScreen(
                     Icon(Icons.Default.Bolt, contentDescription = "Void Blast", tint = NeonCyan)
                 }
 
-                // Primary Melee Slash Attack Button
                 FloatingActionButton(
                     onClick = {
                         slashEffectTimer = 1f
                         val now = System.currentTimeMillis()
                         if (now - lastAttackAt >= 600L) {
                             val target = enemies.firstOrNull { it.id == selectedEnemyId && !it.isDead }
-                                ?: enemies.filter { !it.isDead }.minByOrNull {
-                                    val dx = it.posX - player.posX
-                                    val dy = it.posY - player.posY
-                                    dx * dx + dy * dy
-                                }
+                                ?: enemies.filter { !it.isDead }.minByOrNull { hypot(it.posX - player.posX, it.posY - player.posY) }
                             if (target != null) {
                                 selectedEnemyId = target.id
                                 lastAttackAt = now
                                 if (now - lastHitAt <= 1600L) comboCount++ else comboCount = 1
                                 lastHitAt = now
-                                slashEffectTimer = 1f
                                 repository.attackTargetEnemy(target.id, "MELEE")
                             }
                         }
@@ -748,43 +864,26 @@ fun WorldScreen(
         }
     }
 
-    // V3 damage vignette
-    if (hitFlash > 0f) {
-        Box(modifier = Modifier.fillMaxSize().background(VoidCrimson.copy(alpha = hitFlash * 0.18f)))
-    }
-
-    // Death state is visually explicit instead of silently leaving the player frozen.
-    if (player.isDead) {
-        Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("YOU DIED", color = Color(0xFFD9534F), fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
-                Spacer(modifier = Modifier.height(6.dp))
-                Text("The Void claims the fallen.", color = Color.LightGray, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Respawning...", color = NeonCyan, fontSize = 11.sp)
-            }
-        }
-    }
-
-    if (showStory) {
+    // NPC Dialogue Popup
+    selectedNpc?.let { npc ->
         AlertDialog(
-            onDismissRequest = { showStory = false },
-            title = { Text("The First Void Gate", color = Color.White, fontWeight = FontWeight.Bold) },
+            onDismissRequest = { selectedNpc = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.AccountCircle, contentDescription = null, tint = npc.primaryColor)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(npc.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text(npc.title, color = npc.primaryColor, fontSize = 11.sp)
+                    }
+                }
+            },
             text = {
-                Text(
-                    if (storyStep == 0)
-                        "Something beneath Astral Sanctuary is calling you. The Void Gate has appeared, but only a marked fighter can awaken it."
-                    else
-                        "The gate is awake. Beyond it lies the Void Wastes, where the first fragment of your true story waits.",
-                    color = Color.LightGray
-                )
+                Text(npc.dialogue, color = Color.LightGray, fontSize = 13.sp)
             },
             confirmButton = {
-                TextButton(onClick = { storyStep = 1; showStory = false }) {
-                    Text("Continue", color = NeonCyan)
+                TextButton(onClick = { selectedNpc = null }) {
+                    Text("Close", color = NeonCyan)
                 }
             },
             containerColor = VoidDark
@@ -833,4 +932,88 @@ fun WorldScreen(
             onDismiss = { showServerDialog = false }
         )
     }
+}
+
+/**
+ * Renders a 3D Roblox-style blocky humanoid character model (Head, Torso, Arms, Legs).
+ */
+private fun drawHumanoid3D(
+    drawScope: DrawScope,
+    proj: ProjectedPoint,
+    bodyColor: Color,
+    headColor: Color,
+    walkPhase: Float,
+    isMoving: Boolean
+) {
+    val scale = proj.scale
+    val animState = if (isMoving) SkeletalAnimationEngine.AnimState.WALK else SkeletalAnimationEngine.AnimState.IDLE
+    val pose = SkeletalAnimationEngine.computePose(animState, walkPhase)
+
+    val headSize = 14f * scale
+    val torsoWidth = 16f * scale
+    val torsoHeight = 22f * scale
+    val limbWidth = 6f * scale
+    val limbHeight = 18f * scale
+
+    val spineBone = pose.bones[1]
+    val leftArmBone = pose.bones[3]
+    val rightArmBone = pose.bones[5]
+    val leftLegBone = pose.bones[7]
+    val rightLegBone = pose.bones[9]
+
+    val cx = proj.x
+    val cy = proj.y - (spineBone.transY * scale)
+
+    // Left & Right Legs (Animated by skeletal pose)
+    drawScope.drawRect(
+        color = Color(0xFF1E293B),
+        topLeft = Offset(cx - torsoWidth / 2 + 1f, cy + torsoHeight / 2 + leftLegBone.rotX * 10f * scale),
+        size = Size(limbWidth, limbHeight)
+    )
+    drawScope.drawRect(
+        color = Color(0xFF0F172A),
+        topLeft = Offset(cx + torsoWidth / 2 - limbWidth - 1f, cy + torsoHeight / 2 + rightLegBone.rotX * 10f * scale),
+        size = Size(limbWidth, limbHeight)
+    )
+
+    // Torso (Roblox block style with skeletal spine)
+    drawScope.drawRoundRect(
+        color = bodyColor,
+        topLeft = Offset(cx - torsoWidth / 2, cy - torsoHeight / 2),
+        size = Size(torsoWidth, torsoHeight),
+        cornerRadius = CornerRadius(3f * scale, 3f * scale)
+    )
+
+    // Arms (Animated by skeletal shoulder joints)
+    drawScope.drawRect(
+        color = bodyColor,
+        topLeft = Offset(cx - torsoWidth / 2 - limbWidth - 1f, cy - torsoHeight / 2 + leftArmBone.rotX * 10f * scale),
+        size = Size(limbWidth, limbHeight * 0.85f)
+    )
+    drawScope.drawRect(
+        color = bodyColor,
+        topLeft = Offset(cx + torsoWidth / 2 + 1f, cy - torsoHeight / 2 + rightArmBone.rotX * 10f * scale),
+        size = Size(limbWidth, limbHeight * 0.85f)
+    )
+
+    // Head (Blocky style with face)
+    val headY = cy - torsoHeight / 2 - headSize
+    drawScope.drawRoundRect(
+        color = headColor,
+        topLeft = Offset(cx - headSize / 2, headY),
+        size = Size(headSize, headSize),
+        cornerRadius = CornerRadius(2f * scale, 2f * scale)
+    )
+
+    // Eyes
+    drawScope.drawRect(
+        color = Color.Black,
+        topLeft = Offset(cx - headSize * 0.28f, headY + headSize * 0.35f),
+        size = Size(2.5f * scale, 2.5f * scale)
+    )
+    drawScope.drawRect(
+        color = Color.Black,
+        topLeft = Offset(cx + headSize * 0.08f, headY + headSize * 0.35f),
+        size = Size(2.5f * scale, 2.5f * scale)
+    )
 }

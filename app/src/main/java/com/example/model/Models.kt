@@ -195,3 +195,29 @@ data class NetworkConnectionState(
     val statusMessage: String = "Disconnected",
     val activeCharacterId: String? = null
 )
+
+data class NpcEntity(
+    val id: String,
+    val name: String,
+    val title: String,
+    val role: String,
+    val zoneId: String,
+    val posX: Float,
+    val posY: Float,
+    val posZ: Float = 0f,
+    val primaryColor: Color,
+    val outfitColor: Color,
+    val dialogue: String,
+    val questId: String? = null
+)
+
+data class WorldItemDrop(
+    val id: String,
+    val item: GameItem,
+    val zoneId: String,
+    val posX: Float,
+    val posY: Float,
+    val posZ: Float = 0f,
+    var isPickedUp: Boolean = false,
+    var rotation: Float = 0f
+)
