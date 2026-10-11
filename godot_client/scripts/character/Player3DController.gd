@@ -12,7 +12,7 @@ var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9
 
 @onready var spring_arm: SpringArm3D = $SpringArm3D
 @onready var blocky_model: Node3D = get_node_or_null("BlockyModel")
-@onready var virtual_joystick: VirtualJoystick = get_node_or_null("../UI/VirtualJoystick")
+@onready var virtual_joystick: VoidRealmsVirtualJoystick = get_node_or_null("../UI/VirtualJoystick")
 
 var touch_drag_vector := Vector2.ZERO
 
