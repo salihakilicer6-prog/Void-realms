@@ -2,7 +2,7 @@
 # Godot 4 3D Prototype (VOID REALMS)
 
 extends Control
-class_name VirtualJoystick
+class_name VoidRealmsVirtualJoystick
 
 @export var base_radius: float = 65.0
 @export var knob_radius: float = 28.0
