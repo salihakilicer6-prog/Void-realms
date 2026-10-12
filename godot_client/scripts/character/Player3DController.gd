@@ -47,12 +47,16 @@ func _apply_camera_pitch(delta_pitch: float) -> void:
 		camera_pitch = clamp(camera_pitch + delta_pitch, deg_to_rad(min_pitch_deg), deg_to_rad(max_pitch_deg))
 		spring_arm.rotation = Vector3(camera_pitch, 0.0, 0.0)
 
+func trigger_jump() -> void:
+	if is_on_floor():
+		velocity.y = jump_velocity
+
 func _physics_process(delta: float) -> void:
 	if not is_on_floor():
 		velocity.y -= gravity * delta
 
 	if Input.is_action_just_pressed("jump") and is_on_floor():
-		velocity.y = jump_velocity
+		trigger_jump()
 
 	# Get WASD Keyboard Input
 	var input_dir := Vector2.ZERO
