@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3 uid="uid://c3d_proto_001"]
+[gd_scene load_steps=14 format=3 uid="uid://c3d_proto_001"]
 
 [ext_resource type="Script" path="res://scripts/character/Player3DController.gd" id="1_player_script"]
 [ext_resource type="Script" path="res://scripts/ui/VirtualJoystick.gd" id="2_joystick_script"]
@@ -72,6 +72,9 @@ size = Vector3(2, 6, 2)
 [sub_resource type="BoxShape3D" id="BoxShape3D_pillar"]
 size = Vector3(2, 6, 2)
 
+[sub_resource type="SphereShape3D" id="SphereShape3D_arm"]
+radius = 0.2
+
 [node name="Main3D" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
@@ -111,6 +114,8 @@ shape = SubResource("BoxShape3D_pillar")
 
 [node name="Player3D" type="CharacterBody3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+collision_layer = 2
+collision_mask = 1
 script = ExtResource("1_player_script")
 
 [node name="BlockyModel" type="Node3D" parent="Player3D"]
@@ -155,8 +160,10 @@ shape = SubResource("CapsuleShape3D_player")
 
 [node name="SpringArm3D" type="SpringArm3D" parent="Player3D"]
 transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 1.45, 0)
+shape = SubResource("SphereShape3D_arm")
+collision_mask = 1
 spring_length = 4.5
-margin = 0.25
+margin = 0.15
 
 [node name="Camera3D" type="Camera3D" parent="Player3D/SpringArm3D"]
 near = 0.05

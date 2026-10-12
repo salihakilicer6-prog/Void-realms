@@ -7,10 +7,11 @@ class_name Player3DController
 @export var speed: float = 7.0
 @export var jump_velocity: float = 8.5
 @export var mouse_sensitivity: float = 0.003
-@export var min_pitch_deg: float = -40.0
-@export var max_pitch_deg: float = 70.0
+@export var min_pitch_deg: float = -35.0
+@export var max_pitch_deg: float = 65.0
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
+var camera_pitch: float = 0.0
 
 @onready var spring_arm: SpringArm3D = $SpringArm3D
 @onready var blocky_model: Node3D = get_node_or_null("BlockyModel")
@@ -22,13 +23,12 @@ func _ready() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	if spring_arm:
 		spring_arm.add_excluded_object(get_rid())
+		camera_pitch = spring_arm.rotation.x
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * mouse_sensitivity)
-		if spring_arm:
-			spring_arm.rotate_x(-event.relative.y * mouse_sensitivity)
-			spring_arm.rotation.x = clamp(spring_arm.rotation.x, deg_to_rad(min_pitch_deg), deg_to_rad(max_pitch_deg))
+		_apply_camera_pitch(-event.relative.y * mouse_sensitivity)
 
 	# Toggle mouse capture with ESC
 	if event.is_action_pressed("ui_cancel"):
@@ -40,9 +40,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Android Touch Camera Orbit Support (for drags outside virtual joystick)
 	if event is InputEventScreenDrag:
 		rotate_y(-event.relative.x * mouse_sensitivity * 1.5)
-		if spring_arm:
-			spring_arm.rotate_x(-event.relative.y * mouse_sensitivity * 1.5)
-			spring_arm.rotation.x = clamp(spring_arm.rotation.x, deg_to_rad(min_pitch_deg), deg_to_rad(max_pitch_deg))
+		_apply_camera_pitch(-event.relative.y * mouse_sensitivity * 1.5)
+
+func _apply_camera_pitch(delta_pitch: float) -> void:
+	if spring_arm:
+		camera_pitch = clamp(camera_pitch + delta_pitch, deg_to_rad(min_pitch_deg), deg_to_rad(max_pitch_deg))
+		spring_arm.rotation = Vector3(camera_pitch, 0.0, 0.0)
 
 func _physics_process(delta: float) -> void:
 	if not is_on_floor():
