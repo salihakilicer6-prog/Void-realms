@@ -1,10 +1,9 @@
-[gd_scene load_steps=14 format=3 uid="uid://c3d_proto_001"]
+[gd_scene load_steps=13 format=3 uid="uid://c3d_proto_001"]
 
 [ext_resource type="Script" path="res://scripts/character/Player3DController.gd" id="1_player_script"]
 [ext_resource type="Script" path="res://scripts/ui/VirtualJoystick.gd" id="2_joystick_script"]
 [ext_resource type="Script" path="res://scripts/character/ShadowWarriorModel.gd" id="3_model_script"]
 [ext_resource type="Script" path="res://scripts/ui/JumpButton.gd" id="4_jump_script"]
-[ext_resource type="Script" path="res://scripts/ui/JoystickModeSelector.gd" id="5_selector_script"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.18, 0.25, 0.45, 1)
@@ -34,40 +33,6 @@ size = Vector3(60, 1, 60)
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.4
 height = 1.8
-
-[sub_resource type="BoxMesh" id="BoxMesh_head"]
-size = Vector3(0.36, 0.36, 0.36)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_skin"]
-albedo_color = Color(0.85, 0.65, 0.5, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_visor"]
-size = Vector3(0.28, 0.1, 0.08)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_visor"]
-albedo_color = Color(0.0, 0.85, 1.0, 1)
-roughness = 0.2
-emission_enabled = true
-emission = Color(0.0, 0.85, 1.0, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_torso"]
-size = Vector3(0.55, 0.65, 0.3)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_armor"]
-albedo_color = Color(0.18, 0.25, 0.45, 1)
-roughness = 0.4
-
-[sub_resource type="BoxMesh" id="BoxMesh_arm"]
-size = Vector3(0.2, 0.6, 0.2)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_arm"]
-albedo_color = Color(0.22, 0.3, 0.5, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_leg"]
-size = Vector3(0.22, 0.7, 0.22)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_leg"]
-albedo_color = Color(0.12, 0.15, 0.25, 1)
 
 [sub_resource type="BoxMesh" id="BoxMesh_pillar"]
 size = Vector3(2, 6, 2)
@@ -145,26 +110,15 @@ offset_top = 20.0
 offset_right = 550.0
 offset_bottom = 100.0
 text = "VOID REALMS - Godot 4 3D Technical Prototype
-Controls: WASD / Virtual Joystick (Move) | Touch / Mouse (Rotate Camera) | ESC (Cursor)"
-
-[node name="JoystickModeSelector" type="HBoxContainer" parent="UI"]
-offset_left = 20.0
-offset_top = 110.0
-offset_right = 320.0
-offset_bottom = 150.0
-theme_override_constants/separation = 10
-script = ExtResource("5_selector_script")
+Controls: WASD / Dynamic Touch Joystick (Move) | Touch Drag / Mouse Orbit (Camera) | Space / Touch Jump Button (Jump)"
 
 [node name="VirtualJoystick" type="Control" parent="UI"]
 layout_mode = 3
-anchors_preset = 2
-anchor_top = 1.0
+anchors_preset = 15
+anchor_right = 0.5
 anchor_bottom = 1.0
-offset_left = 40.0
-offset_top = -200.0
-offset_right = 200.0
-offset_bottom = -40.0
-grow_vertical = 0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("2_joystick_script")
 
 [node name="JumpButton" type="Control" parent="UI"]
