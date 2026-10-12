@@ -4,7 +4,7 @@
 [ext_resource type="Script" path="res://scripts/ui/VirtualJoystick.gd" id="2_joystick_script"]
 [ext_resource type="Script" path="res://scripts/character/ShadowWarriorModel.gd" id="3_model_script"]
 [ext_resource type="Script" path="res://scripts/ui/JumpButton.gd" id="4_jump_script"]
-[ext_resource type="Script" path="res://scripts/ui/JoystickToggleButton.gd" id="5_toggle_script"]
+[ext_resource type="Script" path="res://scripts/ui/JoystickModeSelector.gd" id="5_selector_script"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.18, 0.25, 0.45, 1)
@@ -147,13 +147,13 @@ offset_bottom = 100.0
 text = "VOID REALMS - Godot 4 3D Technical Prototype
 Controls: WASD / Virtual Joystick (Move) | Touch / Mouse (Rotate Camera) | ESC (Cursor)"
 
-[node name="JoystickToggleButton" type="Button" parent="UI"]
+[node name="JoystickModeSelector" type="HBoxContainer" parent="UI"]
 offset_left = 20.0
 offset_top = 110.0
-offset_right = 250.0
+offset_right = 320.0
 offset_bottom = 150.0
-text = "Controls: Dynamic Joystick"
-script = ExtResource("5_toggle_script")
+theme_override_constants/separation = 10
+script = ExtResource("5_selector_script")
 
 [node name="VirtualJoystick" type="Control" parent="UI"]
 layout_mode = 3
