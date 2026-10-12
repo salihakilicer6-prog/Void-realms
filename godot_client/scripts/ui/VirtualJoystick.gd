@@ -54,14 +54,18 @@ func _draw() -> void:
 	if not is_active and is_dynamic_mode:
 		return # Hide in dynamic mode when inactive
 
-	var center = dynamic_center if is_dynamic_mode else size * 0.5
+	var local_center: Vector2
+	if is_dynamic_mode:
+		local_center = get_global_transform().affine_inverse() * dynamic_center
+	else:
+		local_center = size * 0.5
 
 	# Draw Joystick Base
-	draw_circle(center, base_radius, base_color)
-	draw_arc(center, base_radius, 0, TAU, 32, base_outline_color, 2.0)
+	draw_circle(local_center, base_radius, base_color)
+	draw_arc(local_center, base_radius, 0, TAU, 32, base_outline_color, 2.0)
 
 	# Draw Joystick Knob
-	draw_circle(center + knob_position, knob_radius, knob_color)
+	draw_circle(local_center + knob_position, knob_radius, knob_color)
 
 func _gui_input(event: InputEvent) -> void:
 	if not is_dynamic_mode:

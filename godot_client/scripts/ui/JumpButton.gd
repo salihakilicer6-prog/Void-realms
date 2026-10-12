@@ -1,5 +1,6 @@
 # Roblox-Style Touch Jump Button for Mobile Control (VOID REALMS)
 # Positioned at bottom right of screen. Calls player.trigger_jump() on touch without camera interference.
+# Features smooth press-down and release scale animation.
 
 extends Control
 
@@ -12,23 +13,32 @@ extends Control
 var player: Player3DController
 var is_pressed: bool = false
 var touch_index: int = -1
+var current_scale: float = 1.0
 
 func _ready() -> void:
 	visible = true
+	set_process(true)
 	player = get_node_or_null(player_node_path) as Player3DController
 	queue_redraw()
 
+func _process(_delta: float) -> void:
+	var target_scale = 0.88 if is_pressed else 1.0
+	if not is_equal_approx(current_scale, target_scale):
+		current_scale = lerp(current_scale, target_scale, 0.3)
+		queue_redraw()
+
 func _draw() -> void:
 	var center = size * 0.5
+	var animated_radius = button_radius * current_scale
 	var color = press_color if is_pressed else bg_color
 
-	# Draw Circular Touch Jump Button
-	draw_circle(center, button_radius, color)
-	draw_arc(center, button_radius, 0, TAU, 32, border_color, 2.5)
+	# Draw Circular Touch Jump Button with smooth animated scale
+	draw_circle(center, animated_radius, color)
+	draw_arc(center, animated_radius, 0, TAU, 32, border_color, 2.5 * current_scale)
 
 	# Draw "JUMP" Text
 	var font = ThemeDB.fallback_font
-	var font_size = 18
+	var font_size = int(18 * current_scale)
 	var text = "JUMP"
 	var text_size = font.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size)
 	var text_pos = center - Vector2(text_size.x * 0.5, -text_size.y * 0.3)
@@ -41,12 +51,10 @@ func _gui_input(event: InputEvent) -> void:
 			is_pressed = true
 			_do_jump()
 			accept_event()
-			queue_redraw()
 		elif not event.pressed and event.index == touch_index:
 			touch_index = -1
 			is_pressed = false
 			accept_event()
-			queue_redraw()
 
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed and touch_index == -1:
@@ -54,12 +62,10 @@ func _gui_input(event: InputEvent) -> void:
 			is_pressed = true
 			_do_jump()
 			accept_event()
-			queue_redraw()
 		elif not event.pressed and touch_index == 999:
 			touch_index = -1
 			is_pressed = false
 			accept_event()
-			queue_redraw()
 
 func _do_jump() -> void:
 	if not player:
