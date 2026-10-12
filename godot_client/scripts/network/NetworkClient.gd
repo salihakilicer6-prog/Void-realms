@@ -7,7 +7,7 @@ signal packet_received(type: String, payload: Dictionary)
 var ws := WebSocketPeer.new()
 var server_url := "ws://127.0.0.1:3000/game"
 var auth_token := ""
-var is_connected := false
+var connection_active := false
 
 func _ready() -> void:
 	set_process(true)
@@ -27,8 +27,8 @@ func _process(_delta: float) -> void:
 	ws.poll()
 	var state = ws.get_ready_state()
 	if state == WebSocketPeer.STATE_OPEN:
-		if not is_connected:
-			is_connected = true
+		if not connection_active:
+			connection_active = true
 			emit_signal("connected_to_server")
 			if auth_token != "":
 				send_packet("AUTH", {"token": auth_token})
@@ -38,8 +38,8 @@ func _process(_delta: float) -> void:
 			if json and typeof(json) == TYPE_DICTIONARY:
 				emit_signal("packet_received", json.get("type", ""), json.get("payload", {}))
 	elif state == WebSocketPeer.STATE_CLOSED:
-		if is_connected:
-			is_connected = false
+		if connection_active:
+			connection_active = false
 			emit_signal("connection_closed")
 
 func send_packet(packet_type: String, payload: Dictionary) -> void:
