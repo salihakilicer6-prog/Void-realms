@@ -6,6 +6,15 @@
 extends Node3D
 class_name ShadowWarriorModel
 
+# Procedural Animation States
+enum AnimState {
+	IDLE,
+	WALK,
+	RUN,
+	JUMP,
+	FALL
+}
+
 # Node references initialized in _build_character_mesh()
 var body_pivot: Node3D
 var torso: Node3D
@@ -29,6 +38,8 @@ var mat_green_glow: StandardMaterial3D
 
 # Animation State Variables
 var anim_time: float = 0.0
+var state_time: float = 0.0
+var current_state: AnimState = AnimState.IDLE
 var parent_character: CharacterBody3D
 
 func _ready() -> void:
@@ -36,8 +47,18 @@ func _ready() -> void:
 	_build_character_mesh()
 	parent_character = get_parent() as CharacterBody3D
 
+func get_current_state_name() -> String:
+	match current_state:
+		AnimState.IDLE: return "IDLE"
+		AnimState.WALK: return "WALK"
+		AnimState.RUN: return "RUN"
+		AnimState.JUMP: return "JUMP"
+		AnimState.FALL: return "FALL"
+		_: return "UNKNOWN"
+
 func _process(delta: float) -> void:
 	anim_time += delta
+	state_time += delta
 	_update_procedural_animations(delta)
 
 func _create_materials() -> void:
@@ -332,7 +353,7 @@ func _build_character_mesh() -> void:
 	shin_plate_r.set_surface_override_material(0, mat_silver)
 	right_shin_pivot.add_child(shin_plate_r)
 
-func _update_procedural_animations(_delta: float) -> void:
+func _update_procedural_animations(delta: float) -> void:
 	if not parent_character:
 		parent_character = get_parent() as CharacterBody3D
 		if not parent_character:
@@ -342,73 +363,163 @@ func _update_procedural_animations(_delta: float) -> void:
 	var horiz_speed = Vector2(vel.x, vel.z).length()
 	var is_floor = parent_character.is_on_floor()
 
+	# Determine target state based on movement & grounded status
+	var target_state: AnimState
 	if not is_floor:
-		# --- JUMP / AIRBORNE ANIMATION ---
-		var jump_t = clamp(vel.y / 8.0, -1.0, 1.0)
-		body_pivot.rotation_degrees.x = lerp(body_pivot.rotation_degrees.x, -10.0, 0.15)
-		torso.position.y = lerp(torso.position.y, 0.98, 0.15)
-
-		left_leg_pivot.rotation_degrees.x = lerp(left_leg_pivot.rotation_degrees.x, -25.0 - jump_t * 15.0, 0.2)
-		left_shin_pivot.rotation_degrees.x = lerp(left_shin_pivot.rotation_degrees.x, 35.0, 0.2)
-
-		right_leg_pivot.rotation_degrees.x = lerp(right_leg_pivot.rotation_degrees.x, 15.0 - jump_t * 10.0, 0.2)
-		right_shin_pivot.rotation_degrees.x = lerp(right_shin_pivot.rotation_degrees.x, 20.0, 0.2)
-
-		left_arm_pivot.rotation_degrees.x = lerp(left_arm_pivot.rotation_degrees.x, 30.0, 0.2)
-		right_arm_pivot.rotation_degrees.x = lerp(right_arm_pivot.rotation_degrees.x, -30.0, 0.2)
-
-		# Coat tails flare outward in wind
-		coat_tail_left.rotation_degrees.x = lerp(coat_tail_left.rotation_degrees.x, 45.0, 0.2)
-		coat_tail_right.rotation_degrees.x = lerp(coat_tail_right.rotation_degrees.x, 45.0, 0.2)
-
-	elif horiz_speed > 0.1:
-		# --- WALK & RUN ANIMATIONS ---
-		var is_running = horiz_speed > 4.5
-		var stride_freq = 12.0 if is_running else 8.0
-		var max_leg_deg = 42.0 if is_running else 26.0
-		var max_arm_deg = 35.0 if is_running else 20.0
-		var lean_deg = -12.0 if is_running else -4.0
-
-		var cycle = sin(anim_time * stride_freq)
-		var cycle_cos = cos(anim_time * stride_freq)
-
-		body_pivot.rotation_degrees.x = lerp(body_pivot.rotation_degrees.x, lean_deg, 0.15)
-		torso.position.y = 0.95 + abs(cycle_cos) * (0.05 if is_running else 0.02)
-
-		# Leg strides
-		left_leg_pivot.rotation_degrees.x = cycle * max_leg_deg
-		right_leg_pivot.rotation_degrees.x = -cycle * max_leg_deg
-
-		left_shin_pivot.rotation_degrees.x = max(0.0, -cycle * 25.0)
-		right_shin_pivot.rotation_degrees.x = max(0.0, cycle * 25.0)
-
-		# Opposite Arm swings
-		left_arm_pivot.rotation_degrees.x = -cycle * max_arm_deg
-		right_arm_pivot.rotation_degrees.x = cycle * max_arm_deg
-
-		left_forearm_pivot.rotation_degrees.x = -15.0 if is_running else -5.0
-		right_forearm_pivot.rotation_degrees.x = -15.0 if is_running else -5.0
-
-		# Coat tails flowing behind in movement
-		var tail_sway = 25.0 + abs(cycle) * (20.0 if is_running else 10.0)
-		coat_tail_left.rotation_degrees.x = tail_sway
-		coat_tail_right.rotation_degrees.x = tail_sway
-
+		if vel.y > 0.2:
+			target_state = AnimState.JUMP
+		elif vel.y < -0.2:
+			target_state = AnimState.FALL
+		else:
+			# Apex of jump transition
+			target_state = AnimState.JUMP if current_state == AnimState.JUMP else AnimState.FALL
 	else:
-		# --- IDLE ANIMATION ---
-		var breath = sin(anim_time * 2.0)
-		body_pivot.rotation_degrees.x = lerp(body_pivot.rotation_degrees.x, 0.0, 0.1)
-		torso.position.y = 0.95 + breath * 0.015
-		head_pivot.rotation_degrees.x = breath * 1.5
+		if horiz_speed > 4.5:
+			target_state = AnimState.RUN
+		elif horiz_speed > 0.1:
+			target_state = AnimState.WALK
+		else:
+			target_state = AnimState.IDLE
 
-		left_leg_pivot.rotation_degrees.x = lerp(left_leg_pivot.rotation_degrees.x, 0.0, 0.1)
-		right_leg_pivot.rotation_degrees.x = lerp(right_leg_pivot.rotation_degrees.x, 0.0, 0.1)
-		left_shin_pivot.rotation_degrees.x = lerp(left_shin_pivot.rotation_degrees.x, 0.0, 0.1)
-		right_shin_pivot.rotation_degrees.x = lerp(right_shin_pivot.rotation_degrees.x, 0.0, 0.1)
+	if target_state != current_state:
+		current_state = target_state
+		state_time = 0.0
 
-		left_arm_pivot.rotation_degrees.x = lerp(left_arm_pivot.rotation_degrees.x, breath * 2.0, 0.1)
-		right_arm_pivot.rotation_degrees.x = lerp(right_arm_pivot.rotation_degrees.x, -breath * 2.0, 0.1)
+	# Smoothing factor for lerp transitions
+	var blend_speed: float = clamp(delta * 12.0, 0.05, 1.0)
 
-		# Gentle coat tail sway in breeze
-		coat_tail_left.rotation_degrees.x = lerp(coat_tail_left.rotation_degrees.x, 8.0 + breath * 3.0, 0.1)
-		coat_tail_right.rotation_degrees.x = lerp(coat_tail_right.rotation_degrees.x, 8.0 + breath * 3.0, 0.1)
+	# Target transform variables
+	var target_body_pitch: float = 0.0
+	var target_torso_y: float = 0.95
+	var target_head_pitch: float = 0.0
+
+	var target_l_leg_x: float = 0.0
+	var target_r_leg_x: float = 0.0
+	var target_l_shin_x: float = 0.0
+	var target_r_shin_x: float = 0.0
+
+	var target_l_arm_x: float = 0.0
+	var target_r_arm_x: float = 0.0
+	var target_l_forearm_x: float = 0.0
+	var target_r_forearm_x: float = 0.0
+
+	var target_coat_tail_l_x: float = 8.0
+	var target_coat_tail_r_x: float = 8.0
+
+	match current_state:
+		AnimState.JUMP:
+			# --- JUMP (ASCENT) ANIMATION ---
+			var jump_t = clamp(vel.y / 8.0, 0.0, 1.0)
+			target_body_pitch = -8.0 - jump_t * 4.0
+			target_torso_y = 0.98
+
+			# Legs tuck upward for jump impulse
+			target_l_leg_x = -30.0 - jump_t * 10.0
+			target_l_shin_x = 45.0
+			target_r_leg_x = 15.0 - jump_t * 10.0
+			target_r_shin_x = 30.0
+
+			# Arms extend dynamically for power and balance
+			target_l_arm_x = 35.0
+			target_r_arm_x = -35.0
+			target_l_forearm_x = -20.0
+			target_r_forearm_x = -20.0
+
+			# Coat tails flare outward with upward push
+			target_coat_tail_l_x = 40.0 + jump_t * 15.0
+			target_coat_tail_r_x = 40.0 + jump_t * 15.0
+
+		AnimState.FALL:
+			# --- FALL (DESCENT) ANIMATION ---
+			var fall_t = clamp(-vel.y / 12.0, 0.0, 1.0)
+			target_body_pitch = -4.0
+			target_torso_y = 0.93
+			target_head_pitch = 4.0
+
+			# Legs extend downward in preparation for landing
+			target_l_leg_x = -10.0
+			target_l_shin_x = 15.0
+			target_r_leg_x = 5.0
+			target_r_shin_x = 10.0
+
+			# Arms spread out slightly for air control
+			target_l_arm_x = 25.0
+			target_r_arm_x = -25.0
+			target_l_forearm_x = -25.0
+			target_r_forearm_x = -25.0
+
+			# Updraft causes coat tails to flutter high behind character
+			target_coat_tail_l_x = 55.0 + fall_t * 20.0
+			target_coat_tail_r_x = 55.0 + fall_t * 20.0
+
+		AnimState.RUN, AnimState.WALK:
+			# --- WALK & RUN ANIMATIONS ---
+			var is_running = (current_state == AnimState.RUN)
+			var stride_freq = 12.0 if is_running else 8.0
+			var max_leg_deg = 42.0 if is_running else 26.0
+			var max_arm_deg = 35.0 if is_running else 20.0
+			var lean_deg = -12.0 if is_running else -4.0
+
+			var cycle = sin(anim_time * stride_freq)
+			var cycle_cos = cos(anim_time * stride_freq)
+
+			target_body_pitch = lean_deg
+			target_torso_y = 0.95 + abs(cycle_cos) * (0.05 if is_running else 0.02)
+			target_head_pitch = -2.0 if is_running else 0.0
+
+			# Leg strides
+			target_l_leg_x = cycle * max_leg_deg
+			target_r_leg_x = -cycle * max_leg_deg
+
+			target_l_shin_x = max(0.0, -cycle * (35.0 if is_running else 25.0))
+			target_r_shin_x = max(0.0, cycle * (35.0 if is_running else 25.0))
+
+			# Opposite Arm swings
+			target_l_arm_x = -cycle * max_arm_deg
+			target_r_arm_x = cycle * max_arm_deg
+
+			target_l_forearm_x = -15.0 if is_running else -5.0
+			target_r_forearm_x = -15.0 if is_running else -5.0
+
+			# Coat tails flowing behind in movement
+			var tail_sway = (35.0 if is_running else 25.0) + abs(cycle) * (20.0 if is_running else 10.0)
+			target_coat_tail_l_x = tail_sway
+			target_coat_tail_r_x = tail_sway
+
+		AnimState.IDLE:
+			# --- IDLE ANIMATION ---
+			var breath = sin(anim_time * 2.0)
+			target_body_pitch = 0.0
+			target_torso_y = 0.95 + breath * 0.015
+			target_head_pitch = breath * 1.5
+
+			target_l_leg_x = 0.0
+			target_r_leg_x = 0.0
+			target_l_shin_x = 0.0
+			target_r_shin_x = 0.0
+
+			target_l_arm_x = breath * 2.0
+			target_r_arm_x = -breath * 2.0
+			target_l_forearm_x = 0.0
+			target_r_forearm_x = 0.0
+
+			target_coat_tail_l_x = 8.0 + breath * 3.0
+			target_coat_tail_r_x = 8.0 + breath * 3.0
+
+	# --- APPLY SMOOTH LERP TRANSITIONS ---
+	body_pivot.rotation_degrees.x = lerp(body_pivot.rotation_degrees.x, target_body_pitch, blend_speed)
+	torso.position.y = lerp(torso.position.y, target_torso_y, blend_speed)
+	head_pivot.rotation_degrees.x = lerp(head_pivot.rotation_degrees.x, target_head_pitch, blend_speed)
+
+	left_leg_pivot.rotation_degrees.x = lerp(left_leg_pivot.rotation_degrees.x, target_l_leg_x, blend_speed)
+	right_leg_pivot.rotation_degrees.x = lerp(right_leg_pivot.rotation_degrees.x, target_r_leg_x, blend_speed)
+	left_shin_pivot.rotation_degrees.x = lerp(left_shin_pivot.rotation_degrees.x, target_l_shin_x, blend_speed)
+	right_shin_pivot.rotation_degrees.x = lerp(right_shin_pivot.rotation_degrees.x, target_r_shin_x, blend_speed)
+
+	left_arm_pivot.rotation_degrees.x = lerp(left_arm_pivot.rotation_degrees.x, target_l_arm_x, blend_speed)
+	right_arm_pivot.rotation_degrees.x = lerp(right_arm_pivot.rotation_degrees.x, target_r_arm_x, blend_speed)
+	left_forearm_pivot.rotation_degrees.x = lerp(left_forearm_pivot.rotation_degrees.x, target_l_forearm_x, blend_speed)
+	right_forearm_pivot.rotation_degrees.x = lerp(right_forearm_pivot.rotation_degrees.x, target_r_forearm_x, blend_speed)
+
+	coat_tail_left.rotation_degrees.x = lerp(coat_tail_left.rotation_degrees.x, target_coat_tail_l_x, blend_speed)
+	coat_tail_right.rotation_degrees.x = lerp(coat_tail_right.rotation_degrees.x, target_coat_tail_r_x, blend_speed)
