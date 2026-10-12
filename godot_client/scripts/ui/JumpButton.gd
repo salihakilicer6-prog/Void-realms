@@ -31,7 +31,7 @@ func _draw() -> void:
 	var font_size = 18
 	var text = "JUMP"
 	var text_size = font.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size)
-	var text_pos = center + Vector3(0, 0, 0) - Vector2(text_size.x * 0.5, -text_size.y * 0.3)
+	var text_pos = center - Vector2(text_size.x * 0.5, -text_size.y * 0.3)
 	draw_string(font, text_pos, text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size, Color.WHITE)
 
 func _gui_input(event: InputEvent) -> void:
