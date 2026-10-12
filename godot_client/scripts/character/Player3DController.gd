@@ -7,6 +7,8 @@ class_name Player3DController
 @export var speed: float = 7.0
 @export var jump_velocity: float = 8.5
 @export var mouse_sensitivity: float = 0.003
+@export var min_pitch_deg: float = -40.0
+@export var max_pitch_deg: float = 70.0
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 
@@ -18,13 +20,15 @@ var touch_drag_vector := Vector2.ZERO
 
 func _ready() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	if spring_arm:
+		spring_arm.add_excluded_object(get_rid())
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		if spring_arm:
 			spring_arm.rotate_x(-event.relative.y * mouse_sensitivity)
-			spring_arm.rotation.x = clamp(spring_arm.rotation.x, deg_to_rad(-75), deg_to_rad(30))
+			spring_arm.rotation.x = clamp(spring_arm.rotation.x, deg_to_rad(min_pitch_deg), deg_to_rad(max_pitch_deg))
 
 	# Toggle mouse capture with ESC
 	if event.is_action_pressed("ui_cancel"):
@@ -38,7 +42,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		rotate_y(-event.relative.x * mouse_sensitivity * 1.5)
 		if spring_arm:
 			spring_arm.rotate_x(-event.relative.y * mouse_sensitivity * 1.5)
-			spring_arm.rotation.x = clamp(spring_arm.rotation.x, deg_to_rad(-75), deg_to_rad(30))
+			spring_arm.rotation.x = clamp(spring_arm.rotation.x, deg_to_rad(min_pitch_deg), deg_to_rad(max_pitch_deg))
 
 func _physics_process(delta: float) -> void:
 	if not is_on_floor():
