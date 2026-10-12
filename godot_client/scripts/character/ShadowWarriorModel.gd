@@ -1,6 +1,7 @@
 # Shadow Warrior Protagonist 3D Character Model & Procedural Animation System (VOID REALMS)
 # High-quality dark fantasy sci-fi anime protagonist (Shadow Warrior)
 # Proportions: Athletic human (1.8m height), matte black long coat, dark armor, silver & deep-green accents.
+# Head Design: Full cohesive dark metal armored helmet with closed faceplate and deep-green visor.
 
 extends Node3D
 class_name ShadowWarriorModel
@@ -25,8 +26,6 @@ var mat_coat: StandardMaterial3D
 var mat_armor: StandardMaterial3D
 var mat_silver: StandardMaterial3D
 var mat_green_glow: StandardMaterial3D
-var mat_hair: StandardMaterial3D
-var mat_skin: StandardMaterial3D
 
 # Animation State Variables
 var anim_time: float = 0.0
@@ -65,16 +64,6 @@ func _create_materials() -> void:
 	mat_green_glow.emission_enabled = true
 	mat_green_glow.emission = Color(0.0, 0.55, 0.3)
 	mat_green_glow.emission_energy_multiplier = 1.5
-
-	# Matte pitch-black messy hair
-	mat_hair = StandardMaterial3D.new()
-	mat_hair.albedo_color = Color(0.02, 0.02, 0.03)
-	mat_hair.roughness = 0.9
-
-	# Pale skin tone for face silhouette
-	mat_skin = StandardMaterial3D.new()
-	mat_skin.albedo_color = Color(0.82, 0.72, 0.65)
-	mat_skin.roughness = 0.6
 
 func _build_character_mesh() -> void:
 	body_pivot = Node3D.new()
@@ -166,67 +155,58 @@ func _build_character_mesh() -> void:
 	pauldron_r.set_surface_override_material(0, mat_armor)
 	torso.add_child(pauldron_r)
 
-	# --- HEAD & MESSY BLACK HAIR ---
+	# --- ARMORED HELMET (FULL CHARACTER HEAD) ---
 	head_pivot = Node3D.new()
 	head_pivot.name = "HeadPivot"
 	head_pivot.position = Vector3(0, 0.44, 0)
 	torso.add_child(head_pivot)
 
-	# Sleek Face / Jaw Mesh
-	var head_mesh = BoxMesh.new()
-	head_mesh.size = Vector3(0.24, 0.28, 0.26)
-	var head_inst = MeshInstance3D.new()
-	head_inst.mesh = head_mesh
-	head_inst.position = Vector3(0, 0.14, 0)
-	head_inst.set_surface_override_material(0, mat_skin)
-	head_pivot.add_child(head_inst)
+	# Main Helmet Dome Shell (Dark Metal)
+	var helmet_mesh = BoxMesh.new()
+	helmet_mesh.size = Vector3(0.28, 0.32, 0.30)
+	var helmet_inst = MeshInstance3D.new()
+	helmet_inst.mesh = helmet_mesh
+	helmet_inst.position = Vector3(0, 0.16, 0)
+	helmet_inst.set_surface_override_material(0, mat_armor)
+	head_pivot.add_child(helmet_inst)
 
-	# Calm/Intimidating Eyes / Visor Accent
-	var eyes_mesh = BoxMesh.new()
-	eyes_mesh.size = Vector3(0.20, 0.04, 0.04)
-	var eyes_inst = MeshInstance3D.new()
-	eyes_inst.mesh = eyes_mesh
-	eyes_inst.position = Vector3(0, 0.16, -0.12)
-	eyes_inst.set_surface_override_material(0, mat_green_glow)
-	head_pivot.add_child(eyes_inst)
+	# Closed Angular Faceplate
+	var faceplate_mesh = PrismMesh.new()
+	faceplate_mesh.size = Vector3(0.26, 0.28, 0.10)
+	var faceplate_inst = MeshInstance3D.new()
+	faceplate_inst.mesh = faceplate_mesh
+	faceplate_inst.position = Vector3(0, 0.14, -0.16)
+	faceplate_inst.rotation_degrees = Vector3(-90, 0, 0) # Angular visor slope
+	faceplate_inst.set_surface_override_material(0, mat_armor)
+	head_pivot.add_child(faceplate_inst)
 
-	# Messy Black Hair Spikes (Layered strands)
-	var hair_group = Node3D.new()
-	hair_group.position = Vector3(0, 0.18, 0)
-	head_pivot.add_child(hair_group)
+	# Sleek Deep-Green Visor Strip
+	var visor_mesh = BoxMesh.new()
+	visor_mesh.size = Vector3(0.22, 0.05, 0.04)
+	var visor_inst = MeshInstance3D.new()
+	visor_inst.mesh = visor_mesh
+	visor_inst.position = Vector3(0, 0.18, -0.16)
+	visor_inst.set_surface_override_material(0, mat_green_glow)
+	head_pivot.add_child(visor_inst)
 
-	var spike_mesh = PrismMesh.new()
-	spike_mesh.size = Vector3(0.12, 0.22, 0.14)
+	# Dark Silver Jaw & Neck Guard Plates
+	var jaw_mesh = BoxMesh.new()
+	jaw_mesh.size = Vector3(0.29, 0.12, 0.28)
+	var jaw_inst = MeshInstance3D.new()
+	jaw_inst.mesh = jaw_mesh
+	jaw_inst.position = Vector3(0, 0.04, -0.02)
+	jaw_inst.set_surface_override_material(0, mat_silver)
+	head_pivot.add_child(jaw_inst)
 
-	# Top/Back/Side Spikes
-	var spike_offsets = [
-		Vector3(0, 0.12, 0.02),
-		Vector3(-0.08, 0.10, -0.04),
-		Vector3(0.08, 0.10, -0.04),
-		Vector3(-0.10, 0.06, 0.06),
-		Vector3(0.10, 0.06, 0.06),
-		Vector3(0, 0.08, 0.10),
-		Vector3(-0.06, 0.14, -0.08),
-		Vector3(0.06, 0.14, -0.08)
-	]
-	var spike_rots = [
-		Vector3(-15, 0, 0),
-		Vector3(-20, 25, -15),
-		Vector3(-20, -25, 15),
-		Vector3(10, 35, -20),
-		Vector3(10, -35, 20),
-		Vector3(25, 0, 0),
-		Vector3(-30, 15, -10),
-		Vector3(-30, -15, 10)
-	]
-
-	for i in range(spike_offsets.size()):
-		var sp = MeshInstance3D.new()
-		sp.mesh = spike_mesh
-		sp.position = spike_offsets[i]
-		sp.rotation_degrees = spike_rots[i]
-		sp.set_surface_override_material(0, mat_hair)
-		hair_group.add_child(sp)
+	# Top Helmet Fin / Crest
+	var crest_mesh = PrismMesh.new()
+	crest_mesh.size = Vector3(0.04, 0.12, 0.24)
+	var crest_inst = MeshInstance3D.new()
+	crest_inst.mesh = crest_mesh
+	crest_inst.position = Vector3(0, 0.36, -0.02)
+	crest_inst.rotation_degrees = Vector3(-15, 0, 0)
+	crest_inst.set_surface_override_material(0, mat_silver)
+	head_pivot.add_child(crest_inst)
 
 	# --- ARMS & GAUNTLETS ---
 	# Left Arm
